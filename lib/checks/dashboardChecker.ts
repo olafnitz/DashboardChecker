@@ -27,6 +27,8 @@ function localChromiumArgs(): string[] {
     '--disable-accelerated-2d-canvas',
     '--no-first-run',
     '--disable-gpu',
+    '--disable-site-isolation-trials',
+    '--disable-features=IsolateOrigins,site-per-process,SameSiteByDefaultCookies,CookiesWithoutSameSiteMustBeSecure',
   ]
   // --single-process / --no-zygote break on some Windows setups
   if (process.platform !== 'win32') {
@@ -41,7 +43,13 @@ async function launchChromium(): Promise<Browser> {
   if (process.env.VERCEL) {
     const sparticuz = (await import('@sparticuz/chromium')).default
     return chromium.launch({
-      args: [...sparticuz.args, '--no-sandbox', '--disable-setuid-sandbox'],
+      args: [
+        ...sparticuz.args, 
+        '--no-sandbox', 
+        '--disable-setuid-sandbox',
+        '--disable-site-isolation-trials',
+        '--disable-features=IsolateOrigins,site-per-process,SameSiteByDefaultCookies,CookiesWithoutSameSiteMustBeSecure'
+      ],
       executablePath: await sparticuz.executablePath(),
       headless: true,
     })
@@ -93,7 +101,11 @@ export class DashboardChecker {
 
     const context = await this.browser.newContext({
       viewport: { width: 1280, height: 720 },
-      userAgent: 'DashboardChecker/1.0'
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+      locale: 'de-DE',
+      timezoneId: 'Europe/Berlin',
+      // Allow taking screenshots to bypass headless detection in some versions
+      permissions: ['geolocation'],
     })
 
     const page = await context.newPage()
