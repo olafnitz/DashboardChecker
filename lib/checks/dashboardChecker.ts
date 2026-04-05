@@ -28,7 +28,6 @@ function localChromiumArgs(): string[] {
     '--no-first-run',
     '--disable-gpu',
     '--disable-site-isolation-trials',
-    '--disable-features=IsolateOrigins,site-per-process,SameSiteByDefaultCookies,CookiesWithoutSameSiteMustBeSecure',
   ]
   // --single-process / --no-zygote break on some Windows setups
   if (process.platform !== 'win32') {
@@ -46,9 +45,7 @@ async function launchChromium(): Promise<Browser> {
       args: [
         ...sparticuz.args, 
         '--no-sandbox', 
-        '--disable-setuid-sandbox',
-        '--disable-site-isolation-trials',
-        '--disable-features=IsolateOrigins,site-per-process,SameSiteByDefaultCookies,CookiesWithoutSameSiteMustBeSecure'
+        '--disable-setuid-sandbox'
       ],
       executablePath: await sparticuz.executablePath(),
       headless: true,
