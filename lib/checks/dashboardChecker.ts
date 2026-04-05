@@ -1,4 +1,5 @@
 import type { Browser, Page } from 'playwright-core'
+import type { CheckProgressPayload } from '@/lib/checks/checkProgress'
 
 export interface PageCheckResult {
   pageName: string | null
@@ -12,6 +13,10 @@ export interface PageCheckResult {
 export interface DashboardCheckResult {
   overallStatus: 'ok' | 'error'
   pageResults: PageCheckResult[]
+}
+
+export interface CheckDashboardOptions {
+  onProgress?: (payload: CheckProgressPayload) => void
 }
 
 function localChromiumArgs(): string[] {
@@ -64,12 +69,27 @@ export class DashboardChecker {
     }
   }
 
-  async checkDashboard(dashboardUrl: string): Promise<DashboardCheckResult> {
+  async checkDashboard(
+    dashboardUrl: string,
+    options?: CheckDashboardOptions
+  ): Promise<DashboardCheckResult> {
+    const emit = options?.onProgress
+
+    emit?.({
+      phase: 'starting',
+      message: 'Check wird vorbereitet …',
+    })
+
     await this.initialize()
 
     if (!this.browser) {
       throw new Error('Browser not initialized')
     }
+
+    emit?.({
+      phase: 'browser_ready',
+      message: 'Browser ist bereit.',
+    })
 
     const context = await this.browser.newContext({
       viewport: { width: 1280, height: 720 },
@@ -79,6 +99,12 @@ export class DashboardChecker {
     const page = await context.newPage()
 
     try {
+      emit?.({
+        phase: 'navigating',
+        message:
+          'Dashboard wird geladen (Looker Studio kann 15–30 Sekunden brauchen) …',
+      })
+
       // Navigate to dashboard with shorter timeout
       // Use 'domcontentloaded' instead of 'networkidle' for faster loading
       try {
@@ -94,6 +120,16 @@ export class DashboardChecker {
       // Wait for Looker Studio to load
       await page.waitForTimeout(3000)
 
+      emit?.({
+        phase: 'dashboard_loaded',
+        message: 'Bericht geladen, Seiten werden erkannt …',
+      })
+
+      emit?.({
+        phase: 'detecting_pages',
+        message: 'Navigation und Seitenliste werden ausgewertet …',
+      })
+
       // Detect pages and their URLs
       const pages = await this.detectPagesWithUrls(page)
 
@@ -102,12 +138,41 @@ export class DashboardChecker {
         console.log(`  ${i + 1}. ${p.name} - ${p.url}`)
       })
 
+      emit?.({
+        phase: 'pages_detected',
+        message:
+          pages.length === 1
+            ? 'Eine Seite gefunden.'
+            : `${pages.length} Seiten gefunden.`,
+        progress: { current: 0, total: pages.length },
+      })
+
       const pageResults: PageCheckResult[] = []
 
       // Check each page
       for (let i = 0; i < pages.length; i++) {
-        const pageResult = await this.checkPage(page, pages[i].name, i + 1, pages[i].url)
+        const idx = i + 1
+        const p = pages[i]
+        emit?.({
+          phase: 'page_check_start',
+          message: `Seite ${idx} von ${pages.length}: „${p.name}“ wird geprüft …`,
+          progress: { current: idx, total: pages.length },
+          pageName: p.name,
+        })
+
+        const pageResult = await this.checkPage(page, p.name, idx, p.url)
         pageResults.push(pageResult)
+
+        emit?.({
+          phase: 'page_check_done',
+          message:
+            pageResult.status === 'ok'
+              ? `Seite ${idx}: OK`
+              : `Seite ${idx}: Problem erkannt`,
+          progress: { current: idx, total: pages.length },
+          pageName: p.name,
+          pageStatus: pageResult.status,
+        })
       }
 
       // Determine overall status

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { dashboardChecker } from '@/lib/checks/dashboardChecker'
 import { processCheckResult } from '@/lib/checks/resultProcessor'
+import type { CheckProgressPayload } from '@/lib/checks/checkProgress'
 
 export const maxDuration = 60
 export const runtime = 'nodejs'
@@ -22,28 +23,22 @@ export async function POST(request: NextRequest) {
     let sessionToken = null
     let user: any = null
 
-    // Method 1: Check Authorization header (Bearer token)
     const authHeader = request.headers.get('authorization')
     console.log('Auth header received:', authHeader ? 'YES' : 'NO')
-    
+
     if (authHeader && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.substring(7) // Remove "Bearer " prefix
+      const token = authHeader.substring(7)
       console.log('Bearer token found, length:', token.length)
-      
+
       try {
-        // Verify token by calling Supabase REST API directly
         const verifyUrl = `${supabaseUrl}/auth/v1/user`
-        console.log('Calling Supabase API to verify token at:', verifyUrl)
-        
         const verifyResponse = await fetch(verifyUrl, {
           method: 'GET',
           headers: {
-            'Authorization': `Bearer ${token}`,
-            'apikey': supabaseAnonKey,
+            Authorization: `Bearer ${token}`,
+            apikey: supabaseAnonKey,
           },
         })
-
-        console.log('Supabase verification response status:', verifyResponse.status)
 
         if (verifyResponse.ok) {
           user = await verifyResponse.json()
@@ -59,18 +54,15 @@ export async function POST(request: NextRequest) {
       console.warn('No Bearer token found in Authorization header')
     }
 
-    // Method 2: Fallback to cookies if no Authorization header or token failed
     if (!user) {
       const cookieHeader = request.headers.get('cookie') || ''
 
-      // Parse cookies
       const cookies = cookieHeader.split(';').reduce((acc: any, cookie: string) => {
         const [key, value] = cookie.trim().split('=')
         acc[key] = decodeURIComponent(value)
         return acc
       }, {})
 
-      // Find the auth token cookie
       for (const [key, value] of Object.entries(cookies)) {
         if (key.includes('-auth-token')) {
           sessionToken = value as string
@@ -98,7 +90,14 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const { dashboardId } = await request.json()
+    let body: { dashboardId?: string; stream?: boolean }
+    try {
+      body = await request.json()
+    } catch {
+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+    }
+
+    const { dashboardId, stream } = body
 
     if (!dashboardId) {
       return NextResponse.json(
@@ -107,7 +106,6 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Use service role to verify ownership and run checks
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceRoleKey)
 
     const { data: dashboard, error: dashboardError } = await supabaseAdmin
@@ -127,16 +125,96 @@ export async function POST(request: NextRequest) {
 
     console.log(`Manually checking dashboard ${dashboardId}: ${dashboard.url}`)
 
-    // Perform the check
+    if (stream) {
+      const encoder = new TextEncoder()
+
+      const readable = new ReadableStream({
+        async start(controller) {
+          const sendProgress = (payload: CheckProgressPayload) => {
+            controller.enqueue(
+              encoder.encode(
+                JSON.stringify({ type: 'progress', ts: Date.now(), ...payload }) + '\n'
+              )
+            )
+          }
+
+          try {
+            const checkResult = await dashboardChecker.checkDashboard(dashboard.url, {
+              onProgress: sendProgress,
+            })
+
+            sendProgress({
+              phase: 'saving',
+              message: 'Ergebnisse werden in der Datenbank gespeichert …',
+            })
+
+            const processedResult = await processCheckResult(
+              dashboardId,
+              checkResult,
+              supabaseAdmin
+            )
+
+            await dashboardChecker.close()
+
+            console.log(
+              `Manual check completed (stream) for dashboard ${dashboardId}: ${processedResult.overallStatus}`
+            )
+
+            controller.enqueue(
+              encoder.encode(
+                JSON.stringify({
+                  type: 'complete',
+                  success: true,
+                  result: {
+                    checkId: processedResult.checkId,
+                    status: processedResult.overallStatus,
+                    timestamp: processedResult.timestamp,
+                    pageResults: processedResult.pageResults,
+                  },
+                }) + '\n'
+              )
+            )
+          } catch (err: unknown) {
+            console.error('Check stream error:', err)
+            try {
+              await dashboardChecker.close()
+            } catch {
+              /* ignore */
+            }
+            const message =
+              err instanceof Error ? err.message : 'Check failed'
+            controller.enqueue(
+              encoder.encode(JSON.stringify({ type: 'error', message }) + '\n')
+            )
+          } finally {
+            controller.close()
+          }
+        },
+      })
+
+      return new NextResponse(readable, {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/x-ndjson; charset=utf-8',
+          'Cache-Control': 'no-cache, no-transform',
+          'X-Content-Type-Options': 'nosniff',
+        },
+      })
+    }
+
     const checkResult = await dashboardChecker.checkDashboard(dashboard.url)
 
-    // Process and store the result using service role
-    const processedResult = await processCheckResult(dashboardId, checkResult, supabaseAdmin)
+    const processedResult = await processCheckResult(
+      dashboardId,
+      checkResult,
+      supabaseAdmin
+    )
 
-    // Clean up browser
     await dashboardChecker.close()
 
-    console.log(`Manual check completed for dashboard ${dashboardId}: ${processedResult.overallStatus}`)
+    console.log(
+      `Manual check completed for dashboard ${dashboardId}: ${processedResult.overallStatus}`
+    )
 
     return NextResponse.json({
       success: true,
