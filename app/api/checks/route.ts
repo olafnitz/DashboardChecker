@@ -4,7 +4,7 @@ import { dashboardChecker } from '@/lib/checks/dashboardChecker'
 import { processCheckResult } from '@/lib/checks/resultProcessor'
 import type { CheckProgressPayload } from '@/lib/checks/checkProgress'
 
-export const maxDuration = 60
+export const maxDuration = 300
 export const runtime = 'nodejs'
 
 export async function POST(request: NextRequest) {

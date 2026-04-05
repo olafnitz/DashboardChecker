@@ -1,18 +1,11 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { supabase } from '@/lib/supabase/client'
-import { ArrowLeft } from 'lucide-react'
+import { useParams, useRouter } from 'next/navigation'
 import { DashboardForm } from '@/components/DashboardForm'
-
-interface Dashboard {
-  id: string
-  name: string
-  url: string
-  created_at: string
-}
+import { Breadcrumbs } from '@/components/Breadcrumbs'
+import { supabase } from '@/lib/supabase/client'
 
 export default function EditDashboardPage() {
   const params = useParams()
@@ -27,7 +20,6 @@ export default function EditDashboardPage() {
   const [authLoading, setAuthLoading] = useState(true)
 
   useEffect(() => {
-    // Check if user is authenticated
     const checkUser = async () => {
       const { data: { user } } = await supabase.auth.getUser()
       setUser(user)
@@ -40,7 +32,6 @@ export default function EditDashboardPage() {
 
     checkUser()
 
-    // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       setUser(session?.user ?? null)
       if (!session?.user) {
@@ -82,60 +73,61 @@ export default function EditDashboardPage() {
 
   if (authLoading || fetchLoading) {
     return (
-      <main className="min-h-screen bg-[#F8FAFC] py-12 px-4">
-        <div className="mx-auto max-w-2xl text-center">
-          <p className="text-slate-600">Loading...</p>
-        </div>
-      </main>
+      <div className="flex justify-center py-20">
+        <div className="animate-spin rounded-full border-b-2 border-[#4F46E5] h-10 w-10" />
+      </div>
     )
   }
 
   if (!user) {
     return (
-      <main className="min-h-screen bg-[#F8FAFC] py-12 px-4">
-        <div className="mx-auto max-w-2xl">
-          <div className="card-base p-8 text-center">
-            <p className="text-slate-600 mb-4">You must be logged in to edit a dashboard.</p>
-            <Link
-              href="/auth"
-              className="btn btn-primary"
-            >
-              Go to Login
-            </Link>
-          </div>
+      <div className="mx-auto max-w-2xl">
+        <div className="card-base p-8 text-center">
+          <p className="mb-4 text-slate-600">Sie müssen angemeldet sein, um ein Dashboard zu bearbeiten.</p>
+          <Link href="/auth" className="btn btn-primary">
+            Zum Login
+          </Link>
         </div>
-      </main>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="mx-auto max-w-2xl">
+        <div className="card-base border-rose-200 bg-rose-50 p-6">
+          <p className="font-medium text-rose-700">{error}</p>
+        </div>
+      </div>
     )
   }
 
   return (
-    <main className="min-h-screen bg-[#F8FAFC] py-12 px-4">
-      <div className="mx-auto max-w-2xl">
-        <div className="mb-6">
-          <Link
-            href={`/dashboards/${dashboardId}`}
-            className="inline-flex items-center text-[#4F46E5] hover:text-[#4338CA] mb-4"
-          >
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back to Dashboard
-          </Link>
-          <h1 className="text-3xl font-bold text-slate-950">Edit Dashboard</h1>
-          <p className="text-slate-600 mt-2">
-            Update your dashboard details and monitoring settings.
-          </p>
-        </div>
-
-        <div className="card-base p-6">
-          <DashboardForm
-            initialData={{
-              id: dashboardId,
-              name,
-              url,
-            }}
-            onSuccess={() => router.push(`/dashboards/${dashboardId}`)}
-          />
-        </div>
+    <div className="mx-auto max-w-2xl space-y-6">
+      <div>
+        <Breadcrumbs
+          items={[
+            { label: 'Dashboards', href: '/' },
+            { label: name || 'Dashboard', href: `/dashboards/${dashboardId}` },
+            { label: 'Bearbeiten' },
+          ]}
+        />
+        <h1 className="text-3xl font-bold text-slate-950">Dashboard bearbeiten</h1>
+        <p className="mt-2 text-slate-600">
+          Aktualisiere Details und Monitoring-Einstellungen, ohne den Kontext der App zu verlassen.
+        </p>
       </div>
-    </main>
+
+      <div className="card-base p-6">
+        <DashboardForm
+          initialData={{
+            id: dashboardId,
+            name,
+            url,
+          }}
+          onSuccess={() => router.push(`/dashboards/${dashboardId}`)}
+        />
+      </div>
+    </div>
   )
 }

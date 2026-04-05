@@ -74,7 +74,7 @@ export function DashboardList() {
   }
 
   const deleteDashboard = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this dashboard?')) return
+    if (!confirm('Bist du sicher, dass du dieses Dashboard löschen möchtest?')) return
 
     try {
       const { error } = await supabase
@@ -134,9 +134,9 @@ export function DashboardList() {
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
           <p className="text-sm font-semibold uppercase tracking-[0.24em] text-[#4F46E5]">Dashboard Monitoring</p>
-          <h2 className="text-3xl font-bold text-slate-900">Your Dashboards</h2>
+          <h2 className="text-3xl font-bold text-slate-900">Deine Dashboards</h2>
           <p className="mt-2 text-slate-600 max-w-2xl">
-            A curated overview of your dashboard health checks, status and latest update times.
+            Ein kuratierter Überblick über die Gesundheit deiner Dashboards, deren Status und die letzten Aktualisierungszeiten.
           </p>
         </div>
 
@@ -145,18 +145,18 @@ export function DashboardList() {
           className="btn btn-primary inline-flex items-center gap-2"
         >
           <Plus className="w-4 h-4" />
-          Add Dashboard
+          Neues Dashboard
         </Link>
       </div>
 
       {dashboards.length === 0 ? (
         <div className="card-base p-8 text-center">
-          <p className="text-slate-600 mb-4">No dashboards yet</p>
+          <p className="text-slate-600 mb-4">Noch keine Dashboards vorhanden</p>
           <Link
             href="/dashboards/new"
             className="btn btn-primary"
           >
-            Create your first dashboard
+            Erstes Dashboard anlegen
           </Link>
         </div>
       ) : (
@@ -176,7 +176,7 @@ export function DashboardList() {
                     <p className="text-sm text-slate-500 truncate max-w-xl">{dashboard.url}</p>
                     {dashboard.lastCheck && (
                       <p className="text-sm text-slate-500 mt-3">
-                        Last checked: <span className="font-medium text-slate-700">{new Date(dashboard.lastCheck.timestamp).toLocaleString()}</span>
+                        Zuletzt geprüft: <span className="font-medium text-slate-700">{new Date(dashboard.lastCheck.timestamp).toLocaleString()}</span>
                       </p>
                     )}
                   </div>
@@ -187,17 +187,17 @@ export function DashboardList() {
                     href={`/dashboards/${dashboard.id}`}
                     className="btn btn-secondary text-sm"
                   >
-                    View Details
+                    Details ansehen
                   </Link>
                   <Link
                     href={`/dashboards/${dashboard.id}/edit`}
-                    className="inline-flex items-center justify-center h-11 w-11 rounded-[8px] bg-slate-100 text-slate-700 hover:bg-slate-200"
+                    className="focus-ring inline-flex items-center justify-center h-11 w-11 rounded-[8px] bg-slate-100 text-slate-700 hover:bg-slate-200"
                   >
                     <Edit className="w-4 h-4" />
                   </Link>
                   <button
                     onClick={() => deleteDashboard(dashboard.id)}
-                    className="inline-flex items-center justify-center h-11 w-11 rounded-[8px] bg-slate-100 text-slate-700 hover:bg-rose-100"
+                    className="focus-ring inline-flex items-center justify-center h-11 w-11 rounded-[8px] bg-slate-100 text-slate-700 hover:bg-rose-100"
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>

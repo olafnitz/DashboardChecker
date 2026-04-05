@@ -1,12 +1,12 @@
 import type { Metadata } from 'next'
-import { Inter } from 'next/font/google'
+import { Manrope } from 'next/font/google'
 import './globals.css'
 
-const inter = Inter({ subsets: ['latin'] })
+const manrope = Manrope({ subsets: ['latin'], variable: '--font-manrope' })
 
 export const metadata: Metadata = {
   title: 'Dashboard Checker',
-  description: 'Monitor Google Looker Studio dashboards automatically',
+  description: 'Automatische Überwachung von Google Looker Studio Dashboards',
   icons: {
     icon: '/favicon.svg',
   },
@@ -18,8 +18,8 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="en">
-      <body className={inter.className}>
+    <html lang="de">
+      <body className={`${manrope.variable} ${manrope.className}`}>
         <div className="min-h-screen bg-gray-50">
           {children}
         </div>

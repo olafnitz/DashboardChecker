@@ -148,31 +148,42 @@ export class DashboardChecker {
       })
 
       const pageResults: PageCheckResult[] = []
+      
+      // Check pages sequentially to prevent Looker Studio from failing under heavy parallel load
+      const batchSize = 1
+      for (let i = 0; i < pages.length; i += batchSize) {
+        const batch = pages.slice(i, i + batchSize)
+        const batchPromises = batch.map(async (p, batchIdx) => {
+          const globalIdx = i + batchIdx + 1
+          
+          emit?.({
+            phase: 'page_check_start',
+            message: `Seite ${globalIdx} von ${pages.length}: „${p.name}“ wird geprüft …`,
+            progress: { current: globalIdx, total: pages.length },
+            pageName: p.name,
+          })
 
-      // Check each page
-      for (let i = 0; i < pages.length; i++) {
-        const idx = i + 1
-        const p = pages[i]
-        emit?.({
-          phase: 'page_check_start',
-          message: `Seite ${idx} von ${pages.length}: „${p.name}“ wird geprüft …`,
-          progress: { current: idx, total: pages.length },
-          pageName: p.name,
+          // Create a new tab for this page to allow parallel checking
+          const pageTab = await context.newPage()
+          try {
+            const pageResult = await this.checkPage(pageTab, p.name, globalIdx, p.url)
+            
+            emit?.({
+              phase: 'page_check_done',
+              message: pageResult.status === 'ok' ? `Seite ${globalIdx}: OK` : `Seite ${globalIdx}: Problem erkannt`,
+              progress: { current: globalIdx, total: pages.length },
+              pageName: p.name,
+              pageStatus: pageResult.status,
+            })
+            
+            return pageResult
+          } finally {
+            await pageTab.close()
+          }
         })
-
-        const pageResult = await this.checkPage(page, p.name, idx, p.url)
-        pageResults.push(pageResult)
-
-        emit?.({
-          phase: 'page_check_done',
-          message:
-            pageResult.status === 'ok'
-              ? `Seite ${idx}: OK`
-              : `Seite ${idx}: Problem erkannt`,
-          progress: { current: idx, total: pages.length },
-          pageName: p.name,
-          pageStatus: pageResult.status,
-        })
+        
+        const results = await Promise.all(batchPromises)
+        pageResults.push(...results)
       }
 
       // Determine overall status
@@ -244,16 +255,27 @@ export class DashboardChecker {
 
       for (const link of navLinks) {
         const ariaLabel = link.getAttribute('aria-label')
-        const id = link.getAttribute('id')
+        
+        // Looker Studio page IDs are usually in data-page-id or in the URL of the link
+        let id = link.getAttribute('data-page-id') || link.getAttribute('id')
+        
+        if (!id) {
+          // If no ID, but it has a class like 'xap-nav-link-...', extract it
+          const classes = Array.from(link.classList)
+          const idClass = classes.find(c => typeof c === 'string' && c.startsWith('xap-nav-link-'))
+          if (idClass) id = idClass.replace('xap-nav-link-', '')
+        }
 
         if (ariaLabel && !seenNames.has(ariaLabel)) {
           seenNames.add(ariaLabel)
-          const pageUrl = `${window.location.origin}${window.location.pathname.split('/page/')[0]}/page/${id || 'unknown'}`
+          // Construct URL correctly
+          const baseUrl = window.location.href.split('/page/')[0]
+          const pageUrl = `${baseUrl}/page/${id || 'unknown'}`
           pageElements.push({
             name: ariaLabel,
             url: pageUrl
           })
-          console.log(`[PAGE.EVAL] Added: ${ariaLabel}`)
+          console.log(`[PAGE.EVAL] Added: ${ariaLabel} with ID ${id}`)
         }
       }
 
@@ -365,21 +387,17 @@ export class DashboardChecker {
     pageUrl?: string
   ): Promise<PageCheckResult> {
     try {
-      // Navigate to page if not the first page or if specific URL provided
-      if (pageNumber > 1 || pageUrl) {
+      // Navigate to page
+      if (pageUrl) {
         try {
-          if (pageUrl && pageUrl !== page.url()) {
-            console.log(`Navigating to page ${pageNumber}: ${pageUrl}`)
-            await page.goto(pageUrl, {
-              waitUntil: 'domcontentloaded',
-              timeout: 15000
-            })
-            await page.waitForTimeout(2000)
-          } else {
-            // Use tabbing strategy for navigation
-            await this.navigateToPage(page, pageNumber - 1)
-            await page.waitForTimeout(2000)
-          }
+          console.log(`Navigating to page ${pageNumber}: ${pageUrl}`)
+          await page.goto(pageUrl, {
+            waitUntil: 'domcontentloaded',
+            timeout: 60000 // Increase navigation timeout heavily for isolated tabs
+          })
+          
+          // Smart wait: wait for spinners to vanish, but max 8sec
+          await this.waitForLookerStudioStability(page)
         } catch (navError) {
           console.error(`Failed to navigate to page ${pageNumber}:`, navError)
           return {
@@ -387,10 +405,30 @@ export class DashboardChecker {
             pageNumber,
             pageUrl,
             status: 'error',
-            errorDescription: `Failed to navigate to page: ${navError instanceof Error ? navError.message : 'Unknown error'}`
+            errorDescription: `Failed to navigate: ${navError instanceof Error ? navError.message : 'Unknown'}`
           }
         }
       }
+
+      // Listen for console errors
+      const consoleErrors: string[] = []
+      page.on('console', msg => {
+        if (msg.type() === 'error') {
+          const text = msg.text()
+          if (text.includes('google.com') || text.includes('reporting')) {
+            consoleErrors.push(`Console: ${text.substring(0, 100)}`)
+          }
+        }
+      })
+
+      // Trigger scrolling to activate lazy-loaded widgets
+      try {
+        await page.evaluate(async () => {
+          window.scrollBy(0, 800)
+          await new Promise(r => setTimeout(r, 500))
+          window.scrollTo(0, 0)
+        })
+      } catch { /* ignore */ }
 
       // Check for loading issues
       const hasLoadingErrors = await this.checkForLoadingErrors(page)
@@ -398,29 +436,29 @@ export class DashboardChecker {
       // Check for error messages
       const errorMessages = await this.checkForErrorMessages(page)
 
-      // Check for data widgets
-      const hasDataWidgets = await this.checkForDataWidgets(page)
+      // Check for data widgets and text
+      const { hasWidgets, hasSignificantText } = await this.checkForDataWidgets(page)
 
       // Determine page status
-      // A page is only an ERROR if:
+      // A page is an ERROR if:
       // 1. It has critical loading errors, OR
-      // 2. It has specific error messages AND no data widgets
-      // A page with data widgets is OK even if there are minor warnings
-      const hasErrors = hasLoadingErrors || (errorMessages.length > 0 && !hasDataWidgets)
+      // 2. It has specific error messages (even if some widgets loaded), OR
+      // 3. It has NO data widgets and NO significant text (likely failed to load content)
+      const hasErrors = hasLoadingErrors || errorMessages.length > 0 || (!hasWidgets && !hasSignificantText)
 
       let errorDescription: string | undefined
       let screenshotUrl: string | undefined
 
-      if (hasErrors) {
+      if (hasErrors || consoleErrors.length > 0) {
         // Take screenshot for debugging
         const screenshot = await page.screenshot({ fullPage: true })
-        // In a real implementation, upload to Supabase Storage
-        // screenshotUrl = await uploadScreenshot(screenshot)
+        
+        const combinedErrors = [...errorMessages, ...consoleErrors]
 
         errorDescription = this.buildErrorDescription(
           hasLoadingErrors,
-          errorMessages,
-          hasDataWidgets
+          combinedErrors,
+          hasWidgets
         )
       }
 
@@ -428,7 +466,7 @@ export class DashboardChecker {
         pageName,
         pageNumber,
         pageUrl: page.url(),
-        status: hasErrors ? 'error' : 'ok',
+        status: (hasErrors || consoleErrors.length > 0) ? 'error' : 'ok',
         errorDescription,
         screenshotUrl
       }
@@ -441,6 +479,65 @@ export class DashboardChecker {
         status: 'error',
         errorDescription: `Failed to check page: ${error instanceof Error ? error.message : 'Unknown error'}`
       }
+    }
+  }
+
+  private async waitForLookerStudioStability(page: Page, maxWaitTimeMs: number = 90000) {
+    console.log(`Waiting for Looker Studio stability (up to ${maxWaitTimeMs}ms)...`)
+    try {
+      const waitStart = Date.now()
+      
+      // Look for common Looker Studio loading indicators
+      const loaders = [
+        '[aria-label*="Loading" i]',
+        '[aria-label*="Laden" i]',
+        '.spinner',
+        '.loading-mask',
+        '.v-spinner',
+        'progress',
+        'md-progress-bar',
+        // Also add logic to wait for data-status="loading" if present
+        '[data-loading="true"]'
+      ]
+      
+      let stillLoading = true
+      while (stillLoading && (Date.now() - waitStart) < maxWaitTimeMs) {
+        let anyLoaderVisible = false
+        
+        for (const selector of loaders) {
+          try {
+            // Count elements that are not fully hidden via CSS
+            const count = await page.locator(selector).evaluateAll((els) => 
+               els.filter(e => {
+                  const style = window.getComputedStyle(e);
+                  return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+               }).length
+            )
+            
+            if (count > 0) {
+              anyLoaderVisible = true
+              break
+            }
+          } catch (e) { /* ignore */ }
+        }
+        
+        if (anyLoaderVisible) {
+          // Still loading, wait 1s before checking again
+          await page.waitForTimeout(1000)
+        } else {
+          // No loaders visible!
+          stillLoading = false
+        }
+      }
+      
+      const elapsed = Date.now() - waitStart
+      console.log(`Stability wait completed after ${elapsed}ms`)
+      
+      // Minimum safety wait for rendering the error components after spinner vanishes
+      await page.waitForTimeout(3500)
+    } catch (e) {
+      console.warn('Stability wait threw error:', e)
+      await page.waitForTimeout(2000)
     }
   }
 
@@ -593,7 +690,8 @@ export class DashboardChecker {
           '.error-state,' +
           '[data-error="true"],' +
           '.fatal-error,' +
-          '.critical-error'
+          '.critical-error,' +
+          '.error-container'
         ))
         
         if (blockedLoaders.length > 0) {
@@ -601,10 +699,10 @@ export class DashboardChecker {
         }
         
         // Check for full-page overlays that prevent interaction
-        const pageOverlay = document.querySelector('[role="dialog"][class*="error"], [role="alertdialog"][class*="error"]')
+        const pageOverlay = document.querySelector('[role="dialog"][class*="error"], [role="alertdialog"][class*="error"], .modal-dialog-bg')
         if (pageOverlay) {
           const content = pageOverlay.textContent || ''
-          if (content.includes('Failed') || content.includes('Error')) {
+          if (content.includes('Failed') || content.includes('Error') || content.includes('Fehler') || content.includes('Problem')) {
             return true
           }
         }
@@ -619,127 +717,173 @@ export class DashboardChecker {
   }
 
   private async checkForErrorMessages(page: Page): Promise<string[]> {
-    const errors: string[] = []
+    const allErrors: string[] = []
 
     try {
-      // Get all text content and look for specific error indicators
-      const errorIndicators = await page.evaluate(() => {
-        const indicators: string[] = []
+      // Give it a few seconds to "settle" initially
+      await page.waitForTimeout(2000)
 
-        // 1. Look for Looker Studio specific error dialogs (NOT including system messages)
-        const errorDialogs = Array.from(document.querySelectorAll('[role="dialog"] [class*="error"], [role="alertdialog"] [class*="error"]'))
-        for (const el of errorDialogs) {
-          const text = el.textContent?.trim()
-          if (text && !text.includes('Systemfehler') && !text.includes('try again')) {
-            indicators.push(`Dialog error: ${text.substring(0, 100)}`)
-          }
+      const patterns = [
+        /Data Set Configuration/i,
+        /Dataset Configuration/i,
+        /cannot connect to your data set/i,
+        /Dataset ist nicht konfiguriert/i,
+        /Konfigurationsfehler/i,
+        /Fehler bei der Datenquelle/i,
+        /Details anzeigen/i,
+        /See details/i,
+        /Details ansehen/i,
+        /Ein Fehler ist aufgetreten/i,
+        /Systemfehler/i
+      ]
+
+      // We poll up to 6 times because external Looker Studio widgets (like Meta Ads via Supermetrics)
+      // take exceptionally long to timeout and render their error overlays.
+      for (let attempt = 0; attempt < 6; attempt++) {
+        const errors: string[] = []
+
+        // 1. Native Playwright Check with getByText
+        for (const pattern of patterns) {
+          try {
+            if (await page.getByText(pattern).count() > 0) {
+              errors.push(`Native detection: ${pattern.source}`)
+            }
+          } catch { /* ignore expected errors */ }
         }
 
-        // 2. Look for data loading failure indicators (not generic messages)
-        const pageContent = document.body.textContent || ''
+        // 2. Comprehensive recursive search in the browser context
+        const deepErrors = await page.evaluate((evalPatterns) => {
+          const results: string[] = []
+          const regexPatterns = evalPatterns.map(p => new RegExp(p.source, p.flags))
+
+          const checkNode = (node: Node) => {
+            if (node.nodeType === Node.TEXT_NODE) {
+              const content = node.textContent || ''
+              for (const pattern of regexPatterns) {
+                if (pattern.test(content)) {
+                  results.push(`Found text pattern: ${content.trim().substring(0, 50)}`)
+                  return true
+                }
+              }
+            }
+            
+            if (node instanceof Element) {
+              if (node.shadowRoot) checkNode(node.shadowRoot)
+              
+              if (node.classList?.contains('error-message') || 
+                  node.classList?.contains('error-container') ||
+                  node.getAttribute('data-testid')?.includes('error')) {
+                results.push(`Found error container: ${node.className}`)
+              }
+            }
+            
+            for (let i = 0; i < node.childNodes.length; i++) {
+              checkNode(node.childNodes[i])
+            }
+            return false
+          }
+
+          checkNode(document.body)
+          return results
+        }, patterns.map(p => ({ source: p.source, flags: p.flags })))
+
+        errors.push(...deepErrors)
+
+        // 3. Fallback: Check all iframes recursively
+        const frames = page.frames()
+        for (const frame of frames) {
+          if (frame === page.mainFrame()) continue
+          
+          for (const pattern of patterns) {
+            try {
+              if (await frame.getByText(pattern).count() > 0) {
+                errors.push(`Frame native detection: ${pattern.source}`)
+              }
+            } catch { /* skip */ }
+          }
+          
+          try {
+            const frameResults = await frame.evaluate((evalPatterns) => {
+              const fResults: string[] = []
+              const regexPatterns = evalPatterns.map(p => new RegExp(p.source, p.flags))
+              
+              const walk = (node: Node) => {
+                if (node.nodeType === Node.TEXT_NODE && node.textContent) {
+                  for (const p of regexPatterns) {
+                    if (p.test(node.textContent)) { fResults.push(`Frame text: ${node.textContent.trim().substring(0, 30)}`); return; }
+                  }
+                }
+                if (node instanceof Element && node.shadowRoot) walk(node.shadowRoot)
+                for (let i = 0; i < node.childNodes.length; i++) walk(node.childNodes[i])
+              }
+              walk(document.body)
+              return fResults
+            }, patterns.map(p => ({ source: p.source, flags: p.flags })))
+            errors.push(...frameResults)
+          } catch { /* skip */ }
+        }
+
+        allErrors.push(...errors)
         
-        // Red flag patterns - only these are REAL failures
-        const criticalErrors = [
-          /failed to load data/i,
-          /connection lost/i,
-          /cannot connect/i,
-          /data source not found/i,
-          /unauthorized access/i,
-          /data not available/i
-        ]
-
-        for (const pattern of criticalErrors) {
-          if (pattern.test(pageContent)) {
-            indicators.push(pageContent.match(pattern)?.[0] || 'Critical data error')
-          }
+        if (allErrors.length > 0) {
+          break // Errors found, stop polling
         }
-
-        // 3. Check for visible error banners (not system messages)
-        // EXCLUDE: generic UI messages that aren't actual failures
-        const errorBanners = Array.from(document.querySelectorAll('[class*="error-banner"], [class*="alert"]'))
-        for (const banner of errorBanners) {
-          const text = banner.textContent?.trim()
-          // Skip LOOKER STUDIO system/info messages that aren't failures
-          if (text && 
-              !text.includes('Systemfehler') && 
-              !text.includes('momentan nicht') &&
-              !text.includes('try signing in') &&
-              !text.includes('info') &&
-              !text.includes('loading') &&
-              !text.includes('Please wait') &&
-              !text.includes('Bitte warten') &&
-              !text.includes('failed to load') && // Skip generic, already covered above
-              text.length > 10 &&
-              text.length < 500) {
-            indicators.push(text.substring(0, 150))
-          }
+        
+        if (attempt < 5) {
+          console.log(`    [Attempt ${attempt + 1}/6] No errors found yet in DOM, waiting 5s before retry...`)
+          await page.waitForTimeout(5000)
         }
-
-        return indicators
-      })
-
-      errors.push(...errorIndicators)
+      }
     } catch (e) {
       console.warn('Error checking for error messages:', e)
     }
 
-    return errors
+    // Deduplicate errors
+    return allErrors.filter((e, i, a) => a.indexOf(e) === i)
   }
 
-  private async checkForDataWidgets(page: Page): Promise<boolean> {
+  private async checkForDataWidgets(page: Page): Promise<{ hasWidgets: boolean, hasSignificantText: boolean }> {
     try {
       // Looker Studio specific widget detection - MORE COMPREHENSIVE
-      const hasContent = await page.evaluate((): boolean => {
-        // 1. Check for actual text content (not just HTML structure)
+      return await page.evaluate(() => {
+        // 1. Check for actual text content
         const bodyText = (document.body.textContent?.trim() || '').length
         const hasSignificantText = bodyText > 300
 
         // 2. Look for SPECIFIC Looker Studio rendered content
         const googlecharts = !!document.querySelector('[class*="gviz"]')
         
-        // 3. Check for SVG charts (actual graph data rendered)
+        // 3. Check for SVG charts
         const svgs = Array.from(document.querySelectorAll('svg'))
         const hasActualCharts = svgs.some(svg => {
-          // Filter out tiny UI SVGs (< 100px likely just icons)
           const rect = svg.getBoundingClientRect()
           return rect.width > 100 && rect.height > 100
         })
         
-        // 4. Look for data table elements (grid/table components)
+        // 4. Look for data table elements
         const tables = document.querySelectorAll('table, [role="grid"]')
         const hasDataTables = tables.length > 0
         
-        // 5. Check for metric cards or scorecards (common Looker Studio widgets)
+        // 5. Check for metric cards
         const metrics = Array.from(document.querySelectorAll('[class*="metric"], [class*="card"], [role="article"]'))
         const hasMetricCards = metrics.some(el => {
           const text = el.textContent?.trim() || ''
-          // Must have numeric content
           return /\d{1,}[.,]\d{1,}|\d{2,}\s*/i.test(text)
         })
         
-        // 6. Check for navigation menu (indicates dashboard loaded)
-        const hasNav = !!document.querySelector('xap-nav-menu')
+        // 7. Check actual visible elements
+        const visibleElementsCount = document.querySelectorAll('*').length
+        const hasVisibleContent = visibleElementsCount > 50
         
-        // 7. Check actual visible elements with data
-        const visibleElements = Array.from(document.querySelectorAll('*'))
-          .filter(el => {
-            const style = window.getComputedStyle(el)
-            const rect = el.getBoundingClientRect()
-            return style.display !== 'none' && rect.height > 0
-          })
-        const hasVisibleContent = visibleElements.length > 50
+        const hasWidgets = hasActualCharts || hasDataTables || hasMetricCards || googlecharts
         
-        // Page has loaded if: significant text + (charts OR tables OR metrics) + visible content
-        const result = hasSignificantText && 
-               (hasActualCharts || hasDataTables || hasMetricCards || googlecharts) && 
-               hasVisibleContent
-        
-        return !!result
+        return {
+          hasWidgets,
+          hasSignificantText: hasSignificantText && hasVisibleContent
+        }
       })
-
-      return hasContent
     } catch {
-      return false
+      return { hasWidgets: false, hasSignificantText: false }
     }
   }
 

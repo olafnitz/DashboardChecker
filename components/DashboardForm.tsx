@@ -34,18 +34,18 @@ export function DashboardForm({ initialData, onSuccess }: DashboardFormProps) {
     const newErrors: Record<string, string> = {}
 
     if (!name.trim()) {
-      newErrors.name = 'Name is required'
+      newErrors.name = 'Name ist erforderlich'
     } else if (name.length > 200) {
-      newErrors.name = 'Name must be less than 200 characters'
+      newErrors.name = 'Der Name muss weniger als 200 Zeichen lang sein'
     }
 
     if (!url.trim()) {
-      newErrors.url = 'URL is required'
+      newErrors.url = 'URL ist erforderlich'
     } else {
       try {
         new URL(url)
       } catch {
-        newErrors.url = 'Please enter a valid URL'
+        newErrors.url = 'Bitte geben Sie eine gültige URL ein'
       }
     }
 
@@ -77,12 +77,12 @@ export function DashboardForm({ initialData, onSuccess }: DashboardFormProps) {
         if (onSuccess) {
           onSuccess()
         } else {
-          router.push('/dashboards')
+          router.push('/')
         }
       } else {
         // Create new dashboard
         if (!user) {
-          throw new Error('You must be logged in to create a dashboard')
+          throw new Error('Sie müssen angemeldet sein, um ein Dashboard zu erstellen')
         }
 
         const { error } = await supabase
@@ -109,7 +109,7 @@ export function DashboardForm({ initialData, onSuccess }: DashboardFormProps) {
     <form onSubmit={handleSubmit} className="space-y-6">
       <div>
         <label htmlFor="name" className="block text-sm font-semibold text-slate-700">
-          Dashboard Name
+          Dashboard-Name
         </label>
         <input
           type="text"
@@ -117,7 +117,7 @@ export function DashboardForm({ initialData, onSuccess }: DashboardFormProps) {
           value={name}
           onChange={(e) => setName(e.target.value)}
           className="w-full rounded-[8px] border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 focus:border-[#4F46E5] focus:outline-none focus:ring-2 focus:ring-[#4F46E5]/20"
-          placeholder="e.g., Sales Dashboard"
+          placeholder="z.B. Vertriebs-Dashboard"
           required
         />
         {errors.name && (
@@ -127,7 +127,7 @@ export function DashboardForm({ initialData, onSuccess }: DashboardFormProps) {
 
       <div>
         <label htmlFor="url" className="block text-sm font-semibold text-slate-700">
-          Dashboard URL
+          Dashboard-URL
         </label>
         <input
           type="url"
@@ -142,7 +142,7 @@ export function DashboardForm({ initialData, onSuccess }: DashboardFormProps) {
           <p className="mt-1 text-sm text-rose-600">{errors.url}</p>
         )}
         <p className="mt-1 text-sm text-slate-500">
-          Enter the full URL of your Google Looker Studio dashboard
+          Geben Sie die vollständige URL Ihres Google Looker Studio-Dashboards ein
         </p>
       </div>
 
@@ -158,7 +158,7 @@ export function DashboardForm({ initialData, onSuccess }: DashboardFormProps) {
           className="btn btn-primary inline-flex items-center justify-center gap-2"
           disabled={loading}
         >
-          {loading ? 'Saving...' : (initialData?.id ? 'Update Dashboard' : 'Create Dashboard')}
+          {loading ? 'Wird gespeichert...' : (initialData?.id ? 'Dashboard aktualisieren' : 'Dashboard erstellen')}
         </button>
 
         <button
@@ -167,7 +167,7 @@ export function DashboardForm({ initialData, onSuccess }: DashboardFormProps) {
           className="btn btn-secondary inline-flex items-center justify-center"
           disabled={loading}
         >
-          Cancel
+          Abbrechen
         </button>
       </div>
     </form>
