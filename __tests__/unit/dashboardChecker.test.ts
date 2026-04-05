@@ -1,7 +1,7 @@
 import { DashboardChecker } from '@/lib/checks/dashboardChecker'
 
 // Mock Playwright
-jest.mock('playwright', () => ({
+jest.mock('playwright-core', () => ({
   chromium: {
     launch: jest.fn(() => ({
       newContext: jest.fn(() => ({

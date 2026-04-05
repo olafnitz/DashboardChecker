@@ -1,4 +1,4 @@
-import { chromium, Browser, Page } from 'playwright'
+import type { Browser, Page } from 'playwright-core'
 
 export interface PageCheckResult {
   pageName: string | null
@@ -14,24 +14,46 @@ export interface DashboardCheckResult {
   pageResults: PageCheckResult[]
 }
 
+function localChromiumArgs(): string[] {
+  const base = [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-accelerated-2d-canvas',
+    '--no-first-run',
+    '--disable-gpu',
+  ]
+  // --single-process / --no-zygote break on some Windows setups
+  if (process.platform !== 'win32') {
+    base.push('--no-zygote', '--single-process')
+  }
+  return base
+}
+
+async function launchChromium(): Promise<Browser> {
+  const { chromium } = await import('playwright-core')
+  // Vercel / AWS-style serverless: bundled Playwright browsers are not present
+  if (process.env.VERCEL) {
+    const sparticuz = (await import('@sparticuz/chromium')).default
+    return chromium.launch({
+      args: [...sparticuz.args, '--no-sandbox', '--disable-setuid-sandbox'],
+      executablePath: await sparticuz.executablePath(),
+      headless: true,
+    })
+  }
+
+  return chromium.launch({
+    headless: true,
+    args: localChromiumArgs(),
+  })
+}
+
 export class DashboardChecker {
   private browser: Browser | null = null
 
   async initialize() {
     if (!this.browser) {
-      this.browser = await chromium.launch({
-        headless: true,
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-accelerated-2d-canvas',
-          '--no-first-run',
-          '--no-zygote',
-          '--single-process', // <- this one doesn't work in Windows
-          '--disable-gpu'
-        ]
-      })
+      this.browser = await launchChromium()
     }
   }
 

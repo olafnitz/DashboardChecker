@@ -3,6 +3,9 @@ import { createClient } from '@supabase/supabase-js'
 import { dashboardChecker } from '@/lib/checks/dashboardChecker'
 import { processCheckResult } from '@/lib/checks/resultProcessor'
 
+export const maxDuration = 60
+export const runtime = 'nodejs'
+
 export async function POST(request: NextRequest) {
   try {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
