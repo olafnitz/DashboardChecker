@@ -25,7 +25,8 @@ interface Dashboard {
 interface CheckResult {
   id: string
   timestamp: string
-  overall_status: 'ok' | 'error'
+  overall_status: 'ok' | 'error' | 'running' | 'incomplete'
+  total_pages?: number | null
   page_results: PageResult[]
 }
 
@@ -97,6 +98,7 @@ export default function DashboardDetailPage() {
           id,
           timestamp,
           overall_status,
+          total_pages,
           page_results (
             id,
             page_name,
@@ -129,10 +131,10 @@ export default function DashboardDetailPage() {
     }
   }
 
-  const triggerManualCheck = async () => {
+  const triggerManualCheck = async (resumeCheckId?: string) => {
     setChecking(true)
     setCheckMessage('')
-    setCheckStatusLine('Check wird gestartet ...')
+    setCheckStatusLine(resumeCheckId ? 'Check wird fortgesetzt ...' : 'Check wird gestartet ...')
     setCheckLog([])
     setCheckFraction(null)
 
@@ -177,7 +179,7 @@ export default function DashboardDetailPage() {
         method: 'POST',
         headers,
         credentials: 'include',
-        body: JSON.stringify({ dashboardId, stream: true }),
+        body: JSON.stringify({ dashboardId, stream: true, resumeCheckId }),
       })
 
       console.log('Check response:', { status: response.status, ok: response.ok })
@@ -268,7 +270,8 @@ export default function DashboardDetailPage() {
     }
   }
 
-  const getStatusIcon = (status: 'ok' | 'error') => {
+  const getStatusIcon = (status: 'ok' | 'error' | 'running' | 'incomplete') => {
+    if (status === 'running' || status === 'incomplete') return <Loader2 className="h-5 w-5 text-indigo-600" />
     return status === 'ok'
       ? <CheckCircle className="h-5 w-5 text-emerald-600" />
       : <XCircle className="h-5 w-5 text-rose-600" />
@@ -321,7 +324,7 @@ export default function DashboardDetailPage() {
 
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <button
-              onClick={triggerManualCheck}
+              onClick={() => triggerManualCheck()}
               disabled={checking}
               className="btn btn-primary inline-flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -440,13 +443,24 @@ export default function DashboardDetailPage() {
                         {getStatusIcon(check.overall_status)}
                         <div className="min-w-0">
                           <p className="text-xl font-bold text-slate-950">
-                            {check.overall_status === 'ok' ? 'Alle Seiten bestanden' : 'Einige Seiten weisen Fehler auf'}
+                            {check.overall_status === 'ok' ? 'Alle Seiten bestanden' : check.overall_status === 'error' ? 'Einige Seiten weisen Fehler auf' : 'Prüfung unvollständig'}
                           </p>
                           {check.page_results && (
                             <span className="mt-2 inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-sm font-semibold text-slate-700">
-                              {check.page_results.filter((page) => page.status === 'ok').length}/{check.page_results.length}{' '}
+                              {check.page_results.filter((page) => page.status === 'ok').length}/{check.total_pages ? check.total_pages : check.page_results.length}{' '}
                               Seiten OK
                             </span>
+                          )}
+                          {(check.overall_status === 'running' || check.overall_status === 'incomplete') && (
+                            <div className="mt-3">
+                              <button
+                                onClick={(e) => { e.stopPropagation(); triggerManualCheck(check.id); }}
+                                disabled={checking}
+                                className="focus-ring inline-flex items-center gap-1 rounded-[6px] bg-indigo-100 px-3 py-1 text-sm font-medium text-indigo-700 hover:bg-indigo-200"
+                              >
+                                {checking ? 'Lädt...' : 'Prüfung fortsetzen'}
+                              </button>
+                            </div>
                           )}
                         </div>
                       </div>

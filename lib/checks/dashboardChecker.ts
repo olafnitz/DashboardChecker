@@ -17,6 +17,9 @@ export interface DashboardCheckResult {
 
 export interface CheckDashboardOptions {
   onProgress?: (payload: CheckProgressPayload) => void
+  onPagesDetected?: (pages: Array<{ name: string; url: string }>) => Promise<void>
+  onPageTested?: (pageResult: PageCheckResult) => Promise<void>
+  existingPageResults?: PageCheckResult[]
 }
 
 function localChromiumArgs(): string[] {
@@ -147,6 +150,10 @@ export class DashboardChecker {
         console.log(`  ${i + 1}. ${p.name} - ${p.url}`)
       })
 
+      if (options?.onPagesDetected) {
+        await options.onPagesDetected(pages)
+      }
+
       emit?.({
         phase: 'pages_detected',
         message:
@@ -172,11 +179,28 @@ export class DashboardChecker {
             pageName: p.name,
           })
 
+          // Skip if already tested in a previous incomplete run
+          const existing = options?.existingPageResults?.find(r => r.pageName === p.name)
+          if (existing) {
+            emit?.({
+              phase: 'page_check_done',
+              message: existing.status === 'ok' ? `Seite ${globalIdx}: OK (bereits geprüft)` : `Seite ${globalIdx}: Problem erkannt (bereits geprüft)`,
+              progress: { current: globalIdx, total: pages.length },
+              pageName: p.name,
+              pageStatus: existing.status,
+            })
+            return existing
+          }
+
           // Create a new tab for this page to allow parallel checking
           const pageTab = await context.newPage()
           try {
             const pageResult = await this.checkPage(pageTab, p.name, globalIdx, p.url)
             
+            if (options?.onPageTested) {
+              await options.onPageTested(pageResult)
+            }
+
             emit?.({
               phase: 'page_check_done',
               message: pageResult.status === 'ok' ? `Seite ${globalIdx}: OK` : `Seite ${globalIdx}: Problem erkannt`,

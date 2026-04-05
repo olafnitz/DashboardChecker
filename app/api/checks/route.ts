@@ -90,14 +90,14 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    let body: { dashboardId?: string; stream?: boolean }
+    let body: { dashboardId?: string; stream?: boolean; resumeCheckId?: string }
     try {
       body = await request.json()
     } catch {
       return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
     }
 
-    const { dashboardId, stream } = body
+    const { dashboardId, stream, resumeCheckId } = body
 
     if (!dashboardId) {
       return NextResponse.json(
@@ -139,25 +139,56 @@ export async function POST(request: NextRequest) {
           }
 
           try {
+            let activeCheckId = resumeCheckId
+            let existingPages: any[] = []
+
+            if (activeCheckId) {
+              const { data } = await supabaseAdmin.from('page_results').select('*').eq('check_result_id', activeCheckId)
+              if (data) existingPages = data
+              await supabaseAdmin.from('check_results').update({ overall_status: 'running' }).eq('id', activeCheckId)
+            } else {
+              const { data: newCheck } = await supabaseAdmin.from('check_results').insert({ dashboard_id: dashboardId, overall_status: 'running', completed_pages: 0 }).select().single()
+              activeCheckId = newCheck?.id
+            }
+
             const checkResult = await dashboardChecker.checkDashboard(dashboard.url, {
               onProgress: sendProgress,
+              existingPageResults: existingPages.map(p => ({
+                 pageName: p.page_name, pageNumber: p.page_number, status: p.status, errorDescription: p.error_description
+              })),
+              onPagesDetected: async (pages) => {
+                 if (activeCheckId) {
+                   await supabaseAdmin.from('check_results').update({ total_pages: pages.length }).eq('id', activeCheckId)
+                 }
+              },
+              onPageTested: async (pageResult) => {
+                 if (activeCheckId) {
+                   await supabaseAdmin.from('page_results').insert({
+                     check_result_id: activeCheckId,
+                     page_name: pageResult.pageName,
+                     page_number: pageResult.pageNumber,
+                     page_url: pageResult.pageUrl,
+                     status: pageResult.status,
+                     error_description: pageResult.errorDescription
+                   })
+                 }
+              }
             })
 
             sendProgress({
               phase: 'saving',
-              message: 'Ergebnisse werden in der Datenbank gespeichert …',
+              message: 'Check beendet. Finaler Status wird gespeichert …',
             })
 
-            const processedResult = await processCheckResult(
-              dashboardId,
-              checkResult,
-              supabaseAdmin
-            )
+            const finalStatus = checkResult.pageResults.some(r => r.status === 'error') ? 'error' : 'ok'
+            if (activeCheckId) {
+              await supabaseAdmin.from('check_results').update({ overall_status: finalStatus }).eq('id', activeCheckId)
+            }
 
             await dashboardChecker.close()
 
             console.log(
-              `Manual check completed (stream) for dashboard ${dashboardId}: ${processedResult.overallStatus}`
+              `Manual check completed (stream) for dashboard ${dashboardId}: ${finalStatus}`
             )
 
             controller.enqueue(
@@ -166,10 +197,10 @@ export async function POST(request: NextRequest) {
                   type: 'complete',
                   success: true,
                   result: {
-                    checkId: processedResult.checkId,
-                    status: processedResult.overallStatus,
-                    timestamp: processedResult.timestamp,
-                    pageResults: processedResult.pageResults,
+                    checkId: activeCheckId,
+                    status: finalStatus,
+                    timestamp: new Date().toISOString(),
+                    pageResults: checkResult.pageResults,
                   },
                 }) + '\n'
               )
@@ -202,27 +233,59 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    const checkResult = await dashboardChecker.checkDashboard(dashboard.url)
+    let activeCheckId = resumeCheckId
+    let existingPages: any[] = []
 
-    const processedResult = await processCheckResult(
-      dashboardId,
-      checkResult,
-      supabaseAdmin
-    )
+    if (activeCheckId) {
+      const { data } = await supabaseAdmin.from('page_results').select('*').eq('check_result_id', activeCheckId)
+      if (data) existingPages = data
+      await supabaseAdmin.from('check_results').update({ overall_status: 'running' }).eq('id', activeCheckId)
+    } else {
+      const { data: newCheck } = await supabaseAdmin.from('check_results').insert({ dashboard_id: dashboardId, overall_status: 'running', completed_pages: 0 }).select().single()
+      activeCheckId = newCheck?.id
+    }
+
+    const checkResult = await dashboardChecker.checkDashboard(dashboard.url, {
+      existingPageResults: existingPages.map(p => ({
+         pageName: p.page_name, pageNumber: p.page_number, status: p.status, errorDescription: p.error_description
+      })),
+      onPagesDetected: async (pages) => {
+         if (activeCheckId) {
+           await supabaseAdmin.from('check_results').update({ total_pages: pages.length }).eq('id', activeCheckId)
+         }
+      },
+      onPageTested: async (pageResult) => {
+         if (activeCheckId) {
+           await supabaseAdmin.from('page_results').insert({
+             check_result_id: activeCheckId,
+             page_name: pageResult.pageName,
+             page_number: pageResult.pageNumber,
+             page_url: pageResult.pageUrl,
+             status: pageResult.status,
+             error_description: pageResult.errorDescription
+           })
+         }
+      }
+    })
+
+    const finalStatus = checkResult.pageResults.some(r => r.status === 'error') ? 'error' : 'ok'
+    if (activeCheckId) {
+      await supabaseAdmin.from('check_results').update({ overall_status: finalStatus }).eq('id', activeCheckId)
+    }
 
     await dashboardChecker.close()
 
     console.log(
-      `Manual check completed for dashboard ${dashboardId}: ${processedResult.overallStatus}`
+      `Manual check completed for dashboard ${dashboardId}: ${finalStatus}`
     )
 
     return NextResponse.json({
       success: true,
       result: {
-        checkId: processedResult.checkId,
-        status: processedResult.overallStatus,
-        timestamp: processedResult.timestamp,
-        pageResults: processedResult.pageResults,
+        checkId: activeCheckId,
+        status: finalStatus,
+        timestamp: new Date().toISOString(),
+        pageResults: checkResult.pageResults,
       },
     })
   } catch (error: any) {
