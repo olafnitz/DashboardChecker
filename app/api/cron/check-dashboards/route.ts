@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import { dashboardChecker } from '@/lib/checks/dashboardChecker'
 import { processCheckResult, getAllDashboardsForChecking } from '@/lib/checks/resultProcessor'
 
+// Cron must run only on request — never during `next build` (Playwright / DB are not available there).
+export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
+
 export async function GET(request: NextRequest) {
   try {
     console.log('Starting dashboard check cron job')
