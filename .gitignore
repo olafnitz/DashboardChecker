@@ -44,3 +44,4 @@ playwright-report/
 # Temporary files
 *.tmp
 *.temp
+node_modules
